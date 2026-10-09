@@ -36,7 +36,6 @@ def _stretch(fn) -> dict:
 
 BTN = _stretch(st.button)
 CHART = _stretch(st.plotly_chart)
-DL = _stretch(st.download_button)
 
 # ════════════════════════════════════════════════════════════════════════════
 #  Estilo
@@ -138,7 +137,7 @@ def edit_disc():
     ss.disc_phase = "input"
 
 
-def review_memorial():
+def review_steps():
     ss.phase = "wizard"
 
 
@@ -397,7 +396,7 @@ def stepper_html(n, cur):
     return '<div class="stepper">' + "".join(parts) + "</div>"
 
 
-def render_wizard(ns, steps, idx_key, on_edit, on_finish, last_extra=None, doc_title="Memorial"):
+def render_wizard(ns, steps, idx_key, on_edit, on_finish, last_extra=None):
     n = len(steps)
     idx = int(min(max(ss[idx_key], 0), n - 1))
     st.markdown(stepper_html(n, idx), unsafe_allow_html=True)
@@ -408,12 +407,9 @@ def render_wizard(ns, steps, idx_key, on_edit, on_finish, last_extra=None, doc_t
         h2.markdown(f'<div class="counter">{idx + 1} / {n}</div>', unsafe_allow_html=True)
         st.divider()
         render_blocks(step.blocks, f"{ns}_{idx}")
-        if idx == n - 1:
-            if last_extra:
-                st.divider()
-                last_extra()
-            st.download_button("📄 Baixar memorial (.md)", core.memorial_to_markdown(doc_title, steps),
-                               file_name=f"{ns}_memorial.md", mime="text/markdown", key=f"{ns}_dl", **DL)
+        if idx == n - 1 and last_extra:
+            st.divider()
+            last_extra()
     c1, c2, c3 = st.columns(3)
     c1.button("✏️ Editar dados", key=f"{ns}_edit", on_click=on_edit, **BTN)
     c2.button("◀ Anterior", key=f"{ns}_prev", disabled=idx == 0, on_click=move, args=(idx_key, -1, n), **BTN)
@@ -449,7 +445,7 @@ with st.sidebar:
     with st.expander("ℹ️ Como usar"):
         st.markdown(
             "1. **Projeto LGR** — escolha o controlador, informe G(s), H(s) e as especificações.\n"
-            "2. Navegue pelo **memorial passo a passo**.\n"
+            "2. Navegue pelo **passo a passo** do cálculo.\n"
             "3. **Ajuste fino** — mexa em Kc, z, p e veja a resposta ao degrau em tempo real.\n"
             "4. **Discretização** — leve o controlador (ou o sistema todo) para o domínio z.\n\n"
             "**Formatos aceitos nos polinômios:**\n"
@@ -463,7 +459,7 @@ with st.sidebar:
 # ════════════════════════════════════════════════════════════════════════════
 st.markdown(
     '<div class="hero"><h1>🎛️ Solver LGR — Controle e Automação</h1>'
-    "<p>Projete PD, PI, PID, compensadores de 1 polo ou o seu próprio Gc(s) com memorial passo a passo, "
+    "<p>Projete PD, PI, PID, compensadores de 1 polo ou o seu próprio Gc(s) com cálculo passo a passo, "
     "ajuste fino interativo e discretização.</p></div>",
     unsafe_allow_html=True,
 )
@@ -599,7 +595,7 @@ def project_inputs():
     spec_preview()
 
     st.write("")
-    if st.button("🚀 Resolver e gerar memorial", type="primary", key="btn_solve", **BTN):
+    if st.button("🚀 Resolver e gerar passo a passo", type="primary", key="btn_solve", **BTN):
         try:
             _solve_and_store(collect_cfg())
         except ValueError as e:
@@ -611,7 +607,7 @@ def project_inputs():
         d = ss.design
         st.success(f"Projeto disponível: **{d['label']}**. Continue para o ajuste fino ou a discretização.")
         a, b, c = st.columns(3)
-        a.button("📖 Rever memorial", on_click=review_memorial, **BTN)
+        a.button("📖 Rever passo a passo", on_click=review_steps, **BTN)
         b.button("🎚️ Ajuste fino", on_click=goto, args=(PAGES[1],), **BTN)
         c.button("⏱️ Discretizar", on_click=send_to_disc, args=("controller",), **BTN)
 
@@ -631,8 +627,7 @@ def project_last_extra():
 
 def page_project():
     if ss.phase == "wizard" and ss.proj_steps:
-        render_wizard("proj", ss.proj_steps, "proj_idx", edit_project, edit_project, project_last_extra,
-                      doc_title=f"Memorial LGR — {ss.design['label'] if ss.design else ''}")
+        render_wizard("proj", ss.proj_steps, "proj_idx", edit_project, edit_project, project_last_extra)
     else:
         project_inputs()
 
@@ -728,7 +723,7 @@ METHOD_LABELS = {"tustin": "Tustin (Bilinear)", "euler": "Euler (Forward)"}
 
 def page_disc():
     if ss.disc_phase == "wizard" and ss.disc_steps:
-        render_wizard("disc", ss.disc_steps, "disc_idx", edit_disc, edit_disc, doc_title="Memorial de discretização")
+        render_wizard("disc", ss.disc_steps, "disc_idx", edit_disc, edit_disc)
         return
 
     st.markdown("### ⏱️ Discretização de F(s)")
