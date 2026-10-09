@@ -10,7 +10,7 @@ Convenções
 ----------
 * Polinômios são arrays numpy 1-D com coeficientes em ordem decrescente de
   potência (mesma convenção de `np.polyval`): [1, 4, 4, 0] = s³ + 4s² + 4s.
-* O "memorial" é uma lista de passos; cada passo é uma lista de blocos
+* O "passo a passo" é uma lista de passos; cada passo é uma lista de blocos
   (tipo, conteúdo). A interface decide como desenhar cada tipo de bloco.
 """
 from __future__ import annotations
@@ -326,6 +326,45 @@ def cx(c, nd: int = 4) -> str:
     return f"{c.real:.{nd}f} {'+' if c.imag >= 0 else '-'} {abs(c.imag):.{nd}f}j"
 
 
+def cx_tex(c, nd: int = 4) -> str:
+    """Complexo em LaTeX: -0.7500 + 1.0233j"""
+    c = complex(c)
+    re = tex_num(c.real, nd)
+    if abs(c.imag) < 1e-9:
+        return re
+    im = tex_num(abs(c.imag), nd)
+    return f"{re} {'+' if c.imag >= 0 else '-'} {im}j"
+
+
+def angle_derivation(dx: float, dy: float):
+    """(expressão LaTeX do arctan com o quadrante tratado, ângulo em graus)."""
+    ang = math.degrees(math.atan2(dy, dx))
+    if abs(dx) < 1e-9:
+        return r"\text{vetor vertical}", ang
+    if dx > 0:
+        return rf"\arctan\frac{{{tex_num(dy)}}}{{{tex_num(dx)}}}", ang
+    ax, ay = tex_num(abs(dx)), tex_num(abs(dy))
+    if dy >= 0:
+        return rf"180^\circ - \arctan\frac{{{ay}}}{{{ax}}}", ang
+    return rf"-180^\circ + \arctan\frac{{{ay}}}{{{ax}}}", ang
+
+
+def vector_block(name: str, root, sd: complex, greek: str | None = None, idx: str = "") -> str:
+    """Bloco aligned: raiz, vetor s_d - raiz e (opcionalmente) seu ângulo."""
+    d = sd - root
+    lines = [rf"{name} &= {cx_tex(root)}",
+             rf"s_d - {name} &= ({cx_tex(sd)}) - ({cx_tex(root)}) = {cx_tex(d)}"]
+    if greek:
+        expr, ang = angle_derivation(d.real, d.imag)
+        lines.append(rf"{greek}{idx} &= {expr} = {ang:.2f}^\circ")
+    else:
+        rad = d.real ** 2 + d.imag ** 2
+        lines.append(rf"|s_d - {name}| &= \sqrt{{({tex_num(d.real)})^2 + ({tex_num(d.imag)})^2}} = "
+                     rf"\sqrt{{{rad:.4f}}} = {math.sqrt(rad):.4f}")
+    return r"\begin{aligned}" + r"\\".join(lines) + r"\end{aligned}"
+
+
+
 def frac(n: str, d: str) -> str:
     return rf"\frac{{{n}}}{{{d}}}"
 
@@ -412,7 +451,7 @@ def fmt_array(c) -> str:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  3. Memorial (lista de passos com blocos tipados)
+#  3. Passo a passo (lista de passos com blocos tipados)
 # ════════════════════════════════════════════════════════════════════════════
 
 
@@ -422,7 +461,7 @@ class Step:
     blocks: list = field(default_factory=list)
 
 
-class Memorial:
+class PassoAPasso:
     """
     Tipos de bloco: md · tex · warn · ok · info · metrics · plot · divider
     """
@@ -443,26 +482,6 @@ class Memorial:
     def commit(self, title: str):
         self.steps.append(Step(title, self._b))
         self._b = []
-
-
-def memorial_to_markdown(title: str, steps: list[Step]) -> str:
-    out = [f"# {title}", ""]
-    for i, st_ in enumerate(steps, 1):
-        out += [f"## {i}. {st_.title}", ""]
-        for kind, p in st_.blocks:
-            if kind == "md":
-                out += [p, ""]
-            elif kind == "tex":
-                out += ["$$", p, "$$", ""]
-            elif kind == "warn":
-                out += [f"> ⚠️ {p}", ""]
-            elif kind == "ok":
-                out += [f"> ✅ {p}", ""]
-            elif kind == "info":
-                out += [f"> ℹ️ {p}", ""]
-            elif kind == "metrics":
-                out += [f"- **{m[0]}:** {m[1]}" for m in p] + [""]
-    return "\n".join(out)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -644,11 +663,11 @@ def root_locus_points(total_num, total_den, s_max: float = 60.0, n_lin: int = 26
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  6. Projeto do controlador por LGR (memorial passo a passo)
+#  6. Projeto do controlador por LGR (passo a passo)
 # ════════════════════════════════════════════════════════════════════════════
 
 
-def _choose_branch(mem: Memorial, plant_angle, extra, double, sigma, wd):
+def _choose_branch(mem: PassoAPasso, plant_angle, extra, double, sigma, wd):
     """Escolhe entre φ = ±180° - ∠GH + extra o ramo que dá zero/polo estável."""
     opt1 = 180 - plant_angle + extra
     opt2 = -180 - plant_angle + extra
@@ -677,7 +696,7 @@ def solve_design(cfg: dict):
     cfg: mod, gN, gD, hN, hD, spec, [gcN, gcD], [gain_scale], [template_id]
     Retorna (steps, design, suggestion). Lança ValueError em dados inválidos.
     """
-    mem = Memorial()
+    mem = PassoAPasso()
     mod = cfg["mod"]
     gN, gD, hN, hD = (np.array(cfg[k], dtype=float) for k in ("gN", "gD", "hN", "hD"))
     spec_in = cfg["spec"]
@@ -791,21 +810,41 @@ def solve_design(cfg: dict):
         return mem.steps, design, design.pop("_suggestion")
 
     # ── Passo: Critério de ângulo ──────────────────────────────────────────
-    zero_angles = [math.degrees(cmath.phase(sd - r)) for r in zR]
-    pole_angles = [math.degrees(cmath.phase(sd - r)) for r in pR]
-    for i, a in enumerate(zero_angles):
-        mem.tex(rf"\alpha_{{{i + 1}}} = \angle(s_d - z_{{{i + 1}}}) = {a:.2f}^\circ")
+    def deg(a):
+        return f"{a:.2f}^\\circ" if a >= 0 else f"({a:.2f}^\\circ)"
+
+    mem.md("Um ponto $s_d$ só pertence ao LGR se a **condição de fase** for satisfeita:")
+    mem.tex(r"\angle G(s_d)H(s_d)G_c(s_d) = \pm 180^\circ\,(2k+1)")
+    mem.md("Cada **zero** contribui com $+\\alpha_i$ e cada **polo** com $-\\theta_j$, sendo o ângulo o do vetor que "
+           "sai da raiz e chega em $s_d$ (parte imaginária sobre parte real, com o quadrante corrigido):")
+    mem.tex(rf"s_d = {cx_tex(sd)}")
+
+    mem.md("**Zeros de malha aberta** — vetor $s_d - z_i$ e ângulo $\\alpha_i$")
+    zero_angles, pole_angles = [], []
     if not zR:
         mem.md("Nenhum zero contribui angularmente.")
-    for i, a in enumerate(pole_angles):
-        mem.tex(rf"\theta_{{{i + 1}}} = \angle(s_d - p_{{{i + 1}}}) = {a:.2f}^\circ")
+    for i, r in enumerate(zR):
+        mem.tex(vector_block(f"z_{{{i + 1}}}", r, sd, r"\alpha", f"_{{{i + 1}}}"))
+        zero_angles.append(math.degrees(cmath.phase(sd - r)))
+
+    mem.md("**Polos de malha aberta** — vetor $s_d - p_j$ e ângulo $\\theta_j$")
     if not pR:
         mem.md("Nenhum polo contribui angularmente.")
-    plant_angle = sum(zero_angles) - sum(pole_angles)
-    zs = " + ".join(f"{a:.2f}^\\circ" for a in zero_angles) or "0^\\circ"
-    ps = " + ".join(f"{a:.2f}^\\circ" for a in pole_angles) or "0^\\circ"
-    mem.tex(r"\angle G(s_d)H(s_d) = \Big(\sum \alpha_i\Big) - \Big(\sum \theta_j\Big)")
-    mem.tex(rf"\angle G(s_d)H(s_d) = ({zs}) - ({ps}) = {plant_angle:.2f}^\circ")
+    for i, r in enumerate(pR):
+        mem.tex(vector_block(f"p_{{{i + 1}}}", r, sd, r"\theta", f"_{{{i + 1}}}"))
+        pole_angles.append(math.degrees(cmath.phase(sd - r)))
+
+    sum_a, sum_t = sum(zero_angles), sum(pole_angles)
+    plant_angle = sum_a - sum_t
+    za = " + ".join(deg(a) for a in zero_angles) or "0^\\circ"
+    pa = " + ".join(deg(a) for a in pole_angles) or "0^\\circ"
+    mem.md("**Soma dos ângulos da planta**")
+    mem.tex(r"\begin{aligned}"
+            rf"\sum \alpha_i &= {za if len(zero_angles) > 1 else ''}{' = ' if len(zero_angles) > 1 else ''}{sum_a:.2f}^\circ \\"
+            rf"\sum \theta_j &= {pa if len(pole_angles) > 1 else ''}{' = ' if len(pole_angles) > 1 else ''}{sum_t:.2f}^\circ \\"
+            rf"\angle G(s_d)H(s_d) &= \sum \alpha_i - \sum \theta_j = {deg(sum_a)} - {deg(sum_t)} = {plant_angle:.2f}^\circ"
+            r"\end{aligned}")
+    mem.info("Este é o ângulo que a planta já fornece. O controlador precisa compensar o que falta para chegar a ±180°.")
     mem.plot(dict(kind="angles", title="Vetores de s_d até cada polo e zero", poles=pR, zeros=zR, sd=sd))
     mem.commit("Aplicação do critério de ângulo")
 
@@ -826,18 +865,22 @@ def solve_design(cfg: dict):
             extra = th_c
             if mod == "pi":
                 mem.md("O PI adiciona um **polo na origem** ($s=0$).")
-                mem.tex(rf"\theta_c = \angle(s_d - 0) = {th_c:.2f}^\circ")
+                mem.tex(vector_block("p_c", 0j, sd, r"\theta", "_{c}"))
                 mem.tex(r"\angle G(s_d)H(s_d) - \theta_c + \varphi = \pm 180^\circ")
             else:
                 double = True
                 mem.md("O PID adiciona um **polo na origem** e **dois zeros idênticos** ($z_1 = z_2$).")
-                mem.tex(rf"\theta_c = \angle(s_d - 0) = {th_c:.2f}^\circ")
+                mem.tex(vector_block("p_c", 0j, sd, r"\theta", "_{c}"))
                 mem.tex(r"\sum\alpha_i - \sum\theta_j - \theta_c + 2\varphi = \pm 180^\circ")
 
         res = _choose_branch(mem, plant_angle, extra, double, sigma, wd_)
         z = res["z"]
         label = "2\\varphi" if double else "\\varphi"
-        mem.md(f"Opções para ${label}$: **{res['opt1']:.2f}°** ou **{res['opt2']:.2f}°**")
+        ex_txt = "" if not extra else (rf" + {extra:.2f}^\circ" if extra >= 0 else rf" - {abs(extra):.2f}^\circ")
+        mem.tex(r"\begin{aligned}"
+                rf"{label} &= +180^\circ - \angle G H{' + \\theta_c' if extra else ''} = 180^\circ - ({plant_angle:.2f}^\circ){ex_txt} = {res['opt1']:.2f}^\circ \\"
+                rf"{label} &= -180^\circ - \angle G H{' + \\theta_c' if extra else ''} = -180^\circ - ({plant_angle:.2f}^\circ){ex_txt} = {res['opt2']:.2f}^\circ"
+                r"\end{aligned}")
         phi = res["phi"] / 2 if double else res["phi"]
         if double:
             mem.md(f"Ramo escolhido: $2\\varphi = {res['phi']:.2f}^\\circ \\Rightarrow$ :blue[**φ = {phi:.2f}°**]")
@@ -845,6 +888,7 @@ def solve_design(cfg: dict):
             mem.md(f"Ramo escolhido (estabilidade / menor módulo): :blue[**φ = {phi:.2f}°**]")
         if not res["stable"]:
             mem.warn("Nenhum ramo produziu um zero no semiplano esquerdo; o controlador resultante tem zero instável.")
+        mem.tex(rf"\sigma_d = -\mathrm{{Re}}(s_d) = {sigma:.4f},\qquad \omega_d = \mathrm{{Im}}(s_d) = {wd_:.4f}")
         mem.tex(phi_txt)
         mem.tex(rf"z = {sigma:.4f} + \frac{{{wd_:.4f}}}{{\tan({phi:.2f}^\circ)}} = {z:.4f}")
         sign_z, abs_z = ("+" if z >= 0 else "-"), f"{abs(z):.4f}"
@@ -878,7 +922,12 @@ def solve_design(cfg: dict):
             else:
                 p = sigma + wd_ / t
             mem.warn("Nenhum ramo produziu um polo no semiplano esquerdo; o controlador resultante é instável.")
-        mem.md(f"Opções para $\\theta_p$: **{opt1:.2f}°** ou **{opt2:.2f}°** → :blue[**θp = {theta_p:.2f}°**]")
+        mem.tex(r"\begin{aligned}"
+                rf"\theta_p &= \angle GH - 180^\circ = ({plant_angle:.2f}^\circ) - 180^\circ = {opt1:.2f}^\circ \\"
+                rf"\theta_p &= \angle GH + 180^\circ = ({plant_angle:.2f}^\circ) + 180^\circ = {opt2:.2f}^\circ"
+                r"\end{aligned}")
+        mem.md(f"Ramo escolhido (polo estável): :blue[**θp = {theta_p:.2f}°**]")
+        mem.tex(rf"\sigma_d = -\mathrm{{Re}}(s_d) = {sigma:.4f},\qquad \omega_d = \mathrm{{Im}}(s_d) = {wd_:.4f}")
         mem.tex(r"p = \sigma_d + \frac{\omega_d}{\tan\theta_p}")
         mem.tex(rf"p = {sigma:.4f} + \frac{{{wd_:.4f}}}{{\tan({theta_p:.2f}^\circ)}} = {p:.4f}")
         sign_p, abs_p = ("+" if p >= 0 else "-"), f"{abs(p):.4f}"
@@ -887,31 +936,52 @@ def solve_design(cfg: dict):
         mem.commit("Controlador: cálculo do polo")
 
     # ── Passo: Critério de módulo ──────────────────────────────────────────
-    all_z = list(zR) + [complex(x) for x in c_zeros]
-    all_p = list(pR) + [complex(x) for x in c_poles]
-    mem.tex(r"|G(s_d)H(s_d)G_c(s_d)| = 1")
-    prod_z = 1.0
-    rows = []
-    for i, r in enumerate(all_z):
-        d = abs(sd - r)
-        prod_z *= d
-        rows.append(rf"|s_d - z_{{{i + 1}}}| = {d:.4f}")
-    prod_p = 1.0
-    for i, r in enumerate(all_p):
-        d = abs(sd - r)
-        prod_p *= d
-        rows.append(rf"|s_d - p_{{{i + 1}}}| = {d:.4f}")
-    if rows:
-        mem.tex(r"\begin{aligned}" + r"\\".join(rows) + r"\end{aligned}")
+    c_z = [complex(x) for x in c_zeros]
+    c_p = [complex(x) for x in c_poles]
+    mem.md("Com o zero/polo do controlador já posicionado, o **critério de módulo** fixa o ganho $K_c$:")
+    mem.tex(r"|G(s_d)H(s_d)G_c(s_d)| = 1 \;\Rightarrow\; K_c = \frac{K_t}{K},\qquad "
+            r"K_t = \frac{\prod |s_d - p_j|}{\prod |s_d - z_i|}")
+    mem.md("Aqui entram **todos** os zeros e polos: os da planta ($z_i$, $p_j$) e os do controlador ($z_{ci}$, $p_{cj}$). "
+           "Para cada um calcula-se o vetor até $s_d$ e seu módulo $\\sqrt{\\mathrm{Re}^2 + \\mathrm{Im}^2}$.")
+    zeros_all = [(f"z_{{{i + 1}}}", r) for i, r in enumerate(zR)] + [(f"z_{{c{i + 1}}}", r) for i, r in enumerate(c_z)]
+    poles_all = [(f"p_{{{i + 1}}}", r) for i, r in enumerate(pR)] + [(f"p_{{c{i + 1}}}", r) for i, r in enumerate(c_p)]
+
+    def prod_tex(sym, items):
+        dists = [abs(sd - r) for _, r in items]
+        prod = float(np.prod(dists)) if dists else 1.0
+        if not dists:
+            return prod, rf"\prod |s_d - {sym}| &= 1 \quad (\text{{produtório vazio}})"
+        return prod, rf"\prod |s_d - {sym}| &= " + r" \cdot ".join(f"{d:.4f}" for d in dists) + f" = {prod:.4f}"
+
+    mem.md("**Zeros** (planta + controlador)")
+    if not zeros_all:
+        mem.md("Nenhum zero.")
+    for name, r in zeros_all:
+        mem.tex(vector_block(name, r, sd))
+    mem.md("**Polos** (planta + controlador)")
+    if not poles_all:
+        mem.md("Nenhum polo.")
+    for name, r in poles_all:
+        mem.tex(vector_block(name, r, sd))
+
+    prod_z, tex_pz = prod_tex("z_i", zeros_all)
+    prod_p, tex_pp = prod_tex("p_j", poles_all)
     kt = prod_p / prod_z
-    mem.tex(rf"K_t = \frac{{\prod |s_d - p_j|}}{{\prod |s_d - z_i|}} = \frac{{{prod_p:.4f}}}{{{prod_z:.4f}}} = {kt:.4f}")
-    mem.md(f"Ganho estático (coef. líderes) da planta: **K = {k_plant:.4f}**")
+    mem.md("**Produtórios e ganho total $K_t$**")
+    mem.tex(r"\begin{aligned}" + tex_pz + r" \\ " + tex_pp + r" \\ "
+            rf"K_t &= \frac{{\prod |s_d - p_j|}}{{\prod |s_d - z_i|}} = \frac{{{prod_p:.4f}}}{{{prod_z:.4f}}} = {kt:.4f}"
+            r"\end{aligned}")
+    mem.md("**Ganho estático da planta** $K$ (razão dos coeficientes líderes de $G(s)H(s)$)")
+    mem.tex(rf"K = \frac{{b_G\, b_H}}{{a_G\, a_H}} = \frac{{{tex_num(gN[0], strip=True)} \cdot {tex_num(hN[0], strip=True)}}}"
+            rf"{{{tex_num(gD[0], strip=True)} \cdot {tex_num(hD[0], strip=True)}}} = {k_plant:.4f}")
     kc_base = kt / k_plant
     kc = kc_base * gain_scale
     mem.tex(rf"K_c = \frac{{K_t}}{{K}} = \frac{{{kt:.4f}}}{{{k_plant:.4f}}} = {kc_base:.4f}")
     if abs(gain_scale - 1) > 1e-9:
         mem.md(f"Ajuste fino de ganho aplicado: fator = **{gain_scale:.4f}**")
         mem.tex(rf"K_c^{{(ajustado)}} = {kc_base:.4f}\cdot {gain_scale:.4f} = {kc:.4f}")
+    mem.ok(f"Ganho do controlador: Kc = {kc:.4f}")
+    mem.commit("Aplicação do critério de módulo")
 
     gcN = pscale(poly_from_roots(c_zeros), kc)
     gcD = poly_from_roots(c_poles)
@@ -929,7 +999,7 @@ def solve_design(cfg: dict):
     mem.md(f"**Controlador {MOD_NAMES[mod]} final**")
     mem.tex(gc_final)
     mem.tex(tf_both_tex("G_c(s)", gcN, gcD))
-    mem.commit("Critério de módulo e Gc(s) final")
+    mem.commit("Controlador Gc(s) final")
 
     design = _make_design(cfg, plant, plantN, plantD, gcN, gcD, totN, totD, kc_base, kc, z, p, spec, sd,
                           f"{label_t} - {MOD_NAMES[mod]}", template_id)
@@ -951,7 +1021,7 @@ def _make_design(cfg, plant, plantN, plantD, gcN, gcD, totN, totD, kc_base, kc, 
     return d
 
 
-def _validate(mem: Memorial, d: dict, sd: complex, spec: dict, kc: float, gain_scale: float):
+def _validate(mem: PassoAPasso, d: dict, sd: complex, spec: dict, kc: float, gain_scale: float):
     """Último passo: valida polos de malha fechada e resposta ao degrau; sugere ajuste de ganho."""
     totN, totD = d["totN"], d["totD"]
     plant = d["plant"]
@@ -1076,8 +1146,11 @@ def apply_tuning(design: dict, kc: float, z: float, p: float) -> dict:
 # ════════════════════════════════════════════════════════════════════════════
 
 
-def discretize(fN, fD, method: str, T: float):
-    """Substitui s por (Az+B)/(Cz+D) e normaliza para denominador mônico."""
+def discretize_detailed(fN, fD, method: str, T: float) -> dict:
+    """
+    Substitui s por (Az+B)/(Cz+D), multiplica por (Cz+D)^n_max e normaliza o denominador.
+    Devolve todos os termos intermediários para o passo a passo.
+    """
     if method == "tustin":
         A, B, C, D = 2.0, -2.0, T, T
     elif method == "euler":
@@ -1089,23 +1162,35 @@ def discretize(fN, fD, method: str, T: float):
     n_max = max(n_num, n_den)
     fa, fb = trim([A, B]), trim([C, D])
 
-    def conv(f, n):
-        res = np.array([0.0])
+    def expand(f, n):
+        total, terms = np.array([0.0]), []
         for k in range(n + 1):
+            a_k = f[n - k]  # coeficiente de s^k
             t1 = np.array([1.0])
             for _ in range(k):
                 t1 = pmul(t1, fa)
             t2 = np.array([1.0])
             for _ in range(n_max - k):
                 t2 = pmul(t2, fb)
-            res = padd(res, f[n - k] * pmul(t1, t2))
-        return res
+            poly = a_k * pmul(t1, t2)
+            terms.append(dict(k=k, a=float(a_k), poly=trim(poly)))
+            total = padd(total, poly)
+        return total, terms
 
-    nz, dz = conv(fN, n_num), conv(fD, n_den)
-    if abs(dz[0]) < 1e-15:
+    N_raw, terms_n = expand(fN, n_num)
+    D_raw, terms_d = expand(fD, n_den)
+    if abs(D_raw[0]) < 1e-15:
         raise ValueError("Denominador discretizado nulo — verifique F(s).")
-    lead = dz[0]
-    return trim(nz / lead), trim(dz / lead)
+    lead = float(D_raw[0])
+    return dict(A=A, B=B, C=C, D=D, fa=fa, fb=fb, n_num=n_num, n_den=n_den, n_max=n_max,
+                N_raw=N_raw, D_raw=D_raw, terms_n=terms_n, terms_d=terms_d, lead=lead,
+                num=trim(N_raw / lead), den=trim(D_raw / lead))
+
+
+def discretize(fN, fD, method: str, T: float):
+    """Atalho: apenas (num, den) de F(z) com denominador mônico."""
+    r = discretize_detailed(fN, fD, method, T)
+    return r["num"], r["den"]
 
 
 def disc_defaults(template_id, source: str):
@@ -1117,32 +1202,149 @@ def disc_defaults(template_id, source: str):
     return None
 
 
+def _sub_expr(f, n, frac_s: str) -> str:
+    """Σ a_k·(Az+B / Cz+D)^k escrito em LaTeX, já com os números."""
+    parts = []
+    for k in range(n, -1, -1):
+        a = f[n - k]
+        if abs(a) < 1e-12:
+            continue
+        mag = abs(a)
+        if k == 0:
+            body = tex_num(mag, 4, strip=True)
+        else:
+            coef = "" if abs(mag - 1) < 1e-12 else tex_num(mag, 4, strip=True) + r"\,"
+            body = coef + rf"\left({frac_s}\right)" + ("" if k == 1 else f"^{{{k}}}")
+        parts.append(("-" if a < 0 else "+", body))
+    if not parts:
+        return "0"
+    out = ("-" if parts[0][0] == "-" else "") + parts[0][1]
+    for sg, body in parts[1:]:
+        out += f" {sg} {body}"
+    return out
+
+
+def _factor_pow(poly, e: int) -> str:
+    poly = trim(poly)
+    if e == 0 or (len(poly) == 1 and abs(poly[0] - 1) < 1e-12):
+        return ""
+    if len(poly) == 1:
+        return rf"{tex_num(poly[0], 4, strip=True)}" + ("" if e == 1 else f"^{{{e}}}")
+    return rf"({poly_tex(poly, 'z')})" + ("" if e == 1 else f"^{{{e}}}")
+
+
+def _terms_tex(sym: str, terms, r: dict) -> str:
+    lines = []
+    for t in terms:
+        if abs(t["a"]) < 1e-12:
+            continue
+        k = t["k"]
+        f1, f2 = _factor_pow(r["fa"], k), _factor_pow(r["fb"], r["n_max"] - k)
+        a_s = tex_num(t["a"], 4, strip=True)
+        if f1 or f2:
+            body = (f1 + f2) if abs(t["a"] - 1) < 1e-12 else (a_s + r"\," + f1 + f2)
+        else:
+            body = a_s
+        lines.append(rf"{sym}_{{{k}}}(z) &= {body} = {poly_tex(t['poly'], 'z')}")
+    return r"\begin{aligned}" + r" \\ ".join(lines) + r"\end{aligned}" if lines else "0"
+
+
 def solve_disc(fN, fD, method: str, T: float, origin: str):
     if T <= 0:
         raise ValueError("O período de amostragem T deve ser positivo.")
-    mem = Memorial()
+    fN, fD = trim(fN), trim(fD)
+    r = discretize_detailed(fN, fD, method, T)
+    mem = PassoAPasso()
     mname = "Tustin (Bilinear)" if method == "tustin" else "Euler (Forward)"
+    A, B, C, D, n_max = r["A"], r["B"], r["C"], r["D"], r["n_max"]
+    fa, fb = r["fa"], r["fb"]
+    pa, pb = poly_tex(fa, "z"), poly_tex(fb, "z")
+    unit_den = len(fb) == 1 and abs(fb[0] - 1) < 1e-12
+    frac_s = pa if unit_den else frac(pa, pb)
+
+    # 1 ─ dados
     mem.md(f"**Origem da função:** {origin}")
     mem.md("**Função a ser discretizada**")
     mem.tex(rf"F(s) = {tf_tex(fN, fD)}")
     mem.metrics([("Método", mname), ("Período T", f"{T:g} s"), ("Taxa de amostragem", f"{1 / T:.4g} Hz")])
+    mem.md(f"Numerador de grau **{r['n_num']}** e denominador de grau **{r['n_den']}**, "
+           f"logo $n_{{max}} = \\max({r['n_num']}, {r['n_den']}) = {n_max}$.")
     mem.commit("Validação dos dados")
 
+    # 2 ─ método
     if method == "tustin":
-        mem.tex(rf"s \;\longrightarrow\; \frac{{2}}{{T}}\,\frac{{z-1}}{{z+1}} = \frac{{2}}{{{T:g}}}\,\frac{{z-1}}{{z+1}}")
-        mem.info("A transformação bilinear preserva a estabilidade (mapeia o semiplano esquerdo para dentro do círculo unitário).")
+        mem.tex(rf"s \;\longrightarrow\; \frac{{2}}{{T}}\,\frac{{z-1}}{{z+1}} = \frac{{2}}{{{T:g}}}\,\frac{{z-1}}{{z+1}} "
+                rf"= \frac{{{pa}}}{{{pb}}}")
+        mem.info("A transformação bilinear preserva a estabilidade (mapeia o semiplano esquerdo para dentro do círculo unitário). "
+                 "Escrevemos $s = \\frac{Az+B}{Cz+D}$ multiplicando topo e base por $T$: "
+                 f"$A={A:g},\\ B={B:g},\\ C={C:g},\\ D={D:g}$.")
     else:
-        mem.tex(rf"s \;\longrightarrow\; \frac{{z-1}}{{T}} = \frac{{z-1}}{{{T:g}}}")
+        mem.tex(rf"s \;\longrightarrow\; \frac{{z-1}}{{T}} = \frac{{z-1}}{{{T:g}}} = \frac{{{pa}}}{{{pb}}}")
         mem.warn("Euler forward pode instabilizar sistemas estáveis se T for grande em relação às constantes de tempo.")
+        mem.info(f"Aqui $s = \\frac{{Az+B}}{{Cz+D}}$ com $A={A:g},\\ B={B:g},\\ C={C:g},\\ D={D:g}$ (o denominador é só a constante $T$).")
     mem.commit("Método e substituição")
 
-    nz, dz = discretize(fN, fD, method, T)
-    mem.md("Após substituir, multiplicar por $(Cz+D)^{n}$ e normalizar o denominador (mônico):")
+    # 3 ─ substituição direta
+    mem.md("**Substituindo $s$ em cada potência de $F(s)$:**")
+    mem.tex(rf"F(z) = \frac{{{_sub_expr(fN, r['n_num'], frac_s)}}}{{{_sub_expr(fD, r['n_den'], frac_s)}}}")
+    if unit_den:
+        mem.info("Não há frações internas (o denominador da substituição é 1), então basta expandir as potências.")
+    else:
+        mem.md(f"Para eliminar as frações internas, multiplicamos numerador **e** denominador por "
+               f"$(Cz+D)^{{n_{{max}}}}$:")
+        mem.tex(rf"(Cz+D)^{{n_{{max}}}} = ({pb})^{{{n_max}}}")
+        mem.md("Assim, cada termo $a_k s^k$ vira:")
+        mem.tex(r"a_k\,s^k \;\longrightarrow\; a_k\,(Az+B)^k\,(Cz+D)^{\,n_{max}-k}")
+    mem.commit("Substituição de s em F(s)")
+
+    # 4 ─ expansão termo a termo
+    mem.md(f"**Numerador** — termos $N_k(z) = b_k\\,(Az+B)^k\\,(Cz+D)^{{{n_max}-k}}$ (potência $s^k$ de $F(s)$):")
+    mem.tex(_terms_tex("N", r["terms_n"], r))
+    nsum = " + ".join(f"N_{{{t['k']}}}" for t in r["terms_n"][::-1] if abs(t["a"]) > 1e-12) or "0"
+    mem.tex(rf"N'(z) = {nsum} = {poly_tex(r['N_raw'], 'z')}")
+    mem.md(f"**Denominador** — termos $D_k(z) = a_k\\,(Az+B)^k\\,(Cz+D)^{{{n_max}-k}}$:")
+    mem.tex(_terms_tex("D", r["terms_d"], r))
+    dsum = " + ".join(f"D_{{{t['k']}}}" for t in r["terms_d"][::-1] if abs(t["a"]) > 1e-12) or "0"
+    mem.tex(rf"D'(z) = {dsum} = {poly_tex(r['D_raw'], 'z')}")
+    mem.md("Somar termos de mesma potência de $z$ dá os polinômios acima.")
+    mem.commit("Expansão e soma dos termos")
+
+    # 5 ─ normalização + fatoração + simplificações
+    nz, dz, lead = r["num"], r["den"], r["lead"]
+    mem.md("**Normalização mônica:** divide-se numerador e denominador pelo coeficiente líder de $D'(z)$:")
+    mem.tex(rf"c = {tex_num(lead, 4)}")
+    mem.tex(r"\begin{aligned}"
+            rf"N(z) &= \frac{{N'(z)}}{{c}} = \frac{{{poly_tex(r['N_raw'], 'z')}}}{{{tex_num(lead, 4)}}} = {poly_tex(nz, 'z')} \\"
+            rf"D(z) &= \frac{{D'(z)}}{{c}} = \frac{{{poly_tex(r['D_raw'], 'z')}}}{{{tex_num(lead, 4)}}} = {poly_tex(dz, 'z')}"
+            r"\end{aligned}")
+    mem.md("**Função de transferência discreta**")
     mem.tex(rf"F(z) = {frac(poly_tex(nz, 'z'), poly_tex(dz, 'z'))}")
+    mem.md("**Forma fatorada** (zeros e polos de $F(z)$)")
     mem.tex(rf"F(z) = {frac(factored_tex(nz, 'z'), factored_tex(dz, 'z'))}")
+
+    z_roots, p_roots = proots(nz), proots(dz)
+    zl, pl, canceled = cancel_roots(z_roots, p_roots, 1e-3)
+    if canceled:
+        k0 = nz[0]
+        sn, sd_ = trim(k0 * poly_from_roots(zl)), trim(poly_from_roots(pl))
+        mem.info("Cancelamento polo-zero em $F(z)$ nas raízes: " + ", ".join(cx(c_) for c_ in canceled)
+                 + ". Forma equivalente simplificada (informativa — o restante do passo a passo usa $F(z)$ sem simplificar):")
+        mem.tex(rf"F(z) = {frac(poly_tex(sn, 'z'), poly_tex(sd_, 'z'))}")
+    else:
+        mem.md("Não há cancelamentos polo-zero em $F(z)$: a forma acima já é irredutível.")
+
+    # verificação DC (s=0 ↔ z=1 nos dois métodos)
+    dc_s = fN[-1] / fD[-1] if abs(fD[-1]) > 1e-12 else None
+    den1 = np.polyval(dz, 1.0)
+    dc_z = np.polyval(nz, 1.0) / den1 if abs(den1) > 1e-9 else None
+    if dc_s is not None and dc_z is not None:
+        good = abs(dc_s - dc_z) <= 1e-6 * max(1.0, abs(dc_s))
+        (mem.ok if good else mem.warn)(
+            f"Verificação do ganho DC: F(s=0) = {dc_s:.4f} e F(z=1) = {dc_z:.4f}  →  "
+            + ("coincidem ✅ (s = 0 corresponde a z = 1 nos dois métodos)" if good else "diferem ⚠️"))
     mem.commit("Normalização mônica e F(z) final")
 
-    # Equação de diferenças
+    # 6 ─ equação de diferenças e estabilidade
     m = len(dz) - 1
     if len(nz) - 1 > m:
         mem.warn("F(z) é imprópria (grau do numerador maior que o do denominador): não é realizável como equação de diferenças causal.")
@@ -1152,15 +1354,14 @@ def solve_disc(fN, fD, method: str, T: float, origin: str):
         terms_u = [f"{tex_num(b[i], 4)}\\,u[k{'-' + str(i) if i else ''}]" for i in range(m + 1) if abs(b[i]) > 1e-12]
         terms_y = [f"{tex_num(-a[i], 4)}\\,y[k-{i}]" for i in range(1, m + 1) if abs(a[i]) > 1e-12]
         rhs = " + ".join(terms_u + terms_y).replace("+ -", "- ") or "0"
-        mem.md("Com $F(z)=Y(z)/U(z)$ e $z^{-1}$ como atraso de uma amostra:")
+        mem.md("Com $F(z)=Y(z)/U(z)$, multiplica-se em cruz e usa-se $z^{-1}$ como atraso de uma amostra:")
         mem.tex(rf"y[k] = {rhs}")
         mem.info("Use esta equação diretamente no seu código (CLP, microcontrolador, Simulink...). Cada `u[k-i]` é a entrada i amostras atrás.")
-    pz, zz = proots(dz), proots(nz)
-    stable = bool(pz.size == 0 or np.all(np.abs(pz) < 1 - 1e-9))
+    stable = bool(p_roots.size == 0 or np.all(np.abs(p_roots) < 1 - 1e-9))
     (mem.ok if stable else mem.warn)(
-        "Polos de F(z): " + (", ".join(cx(r) for r in pz) if pz.size else "nenhum")
+        "Polos de F(z): " + (", ".join(cx(r_) for r_ in p_roots) if p_roots.size else "nenhum")
         + f"  →  {'todos dentro do círculo unitário (estável)' if stable else 'há polo fora/sobre o círculo unitário'}")
-    mem.plot(dict(kind="zplane", title="Polos e zeros de F(z)", poles=pz, zeros=zz))
+    mem.plot(dict(kind="zplane", title="Polos e zeros de F(z)", poles=p_roots, zeros=z_roots))
     mem.commit("Equação de diferenças e estabilidade")
     return mem.steps, dict(num=nz, den=dz, stable=stable)
 
