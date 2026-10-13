@@ -611,6 +611,17 @@ def build_controller(mod: str, kc: float, z: float = 0.0, p: float = 0.0, custom
     raise ValueError(f"Controlador desconhecido: {mod}")
 
 
+def pid_gains(mod: str, kc: float, z: float) -> dict:
+    """Ganhos da forma paralela Gc = Kp + Ki/s + Kd·s a partir de Kc e do zero z."""
+    if mod == "pd":
+        return dict(Kp=kc * z, Ki=0.0, Kd=kc)
+    if mod == "pi":
+        return dict(Kp=kc, Ki=kc * z, Kd=0.0)
+    if mod == "pid":
+        return dict(Kp=2 * kc * z, Ki=kc * z * z, Kd=kc)
+    raise ValueError("Ganhos Kp/Ki/Kd só existem para PD, PI e PID.")
+
+
 def _ts_factor(spec: dict) -> float:
     return spec.get("ts_factor", 4)
 
@@ -999,6 +1010,32 @@ def solve_design(cfg: dict):
     mem.md(f"**Controlador {MOD_NAMES[mod]} final**")
     mem.tex(gc_final)
     mem.tex(tf_both_tex("G_c(s)", gcN, gcD))
+
+    if mod in ("pd", "pi", "pid"):
+        g = pid_gains(mod, kc, z)
+        mem.md("**Ganhos explícitos $K_p$, $K_i$, $K_d$** (forma paralela)")
+        if mod == "pd":
+            mem.tex(r"G_c(s) = K_c\,(s+z) = K_c\,z + K_c\,s = K_p + K_d\,s")
+            mem.tex(r"K_p = K_c\,z,\qquad K_d = K_c")
+            mem.tex(rf"\begin{{aligned}}K_p &= {kc:.4f}\cdot {z:.4f} = {g['Kp']:.4f} \\ K_d &= {g['Kd']:.4f}\end{{aligned}}")
+            mem.tex(rf"G_c(s) = {g['Kp']:.4f} + {g['Kd']:.4f}\,s")
+        elif mod == "pi":
+            mem.tex(r"G_c(s) = K_c\,\frac{s+z}{s} = K_c + \frac{K_c\,z}{s} = K_p + \frac{K_i}{s}")
+            mem.tex(r"K_p = K_c,\qquad K_i = K_c\,z")
+            mem.tex(rf"\begin{{aligned}}K_p &= {g['Kp']:.4f} \\ K_i &= {kc:.4f}\cdot {z:.4f} = {g['Ki']:.4f}\end{{aligned}}")
+            mem.tex(rf"G_c(s) = {g['Kp']:.4f} + \frac{{{g['Ki']:.4f}}}{{s}}")
+        else:
+            mem.tex(r"G_c(s) = K_c\,\frac{(s+z)^2}{s} = K_c\,s + 2K_c\,z + \frac{K_c\,z^2}{s} = K_d\,s + K_p + \frac{K_i}{s}")
+            mem.tex(r"K_p = 2\,K_c\,z,\qquad K_i = K_c\,z^2,\qquad K_d = K_c")
+            mem.tex(rf"\begin{{aligned}}K_p &= 2\cdot {kc:.4f}\cdot {z:.4f} = {g['Kp']:.4f} \\ "
+                    rf"K_i &= {kc:.4f}\cdot ({z:.4f})^2 = {g['Ki']:.4f} \\ K_d &= {g['Kd']:.4f}\end{{aligned}}")
+            mem.tex(rf"G_c(s) = {g['Kp']:.4f} + \frac{{{g['Ki']:.4f}}}{{s}} + {g['Kd']:.4f}\,s")
+        cards = [("Kp", f"{g['Kp']:.4f}", "proporcional")]
+        if mod in ("pi", "pid"):
+            cards.append(("Ki", f"{g['Ki']:.4f}", "integral"))
+        if mod in ("pd", "pid"):
+            cards.append(("Kd", f"{g['Kd']:.4f}", "derivativo"))
+        mem.metrics(cards)
     mem.commit("Controlador Gc(s) final")
 
     design = _make_design(cfg, plant, plantN, plantD, gcN, gcD, totN, totD, kc_base, kc, z, p, spec, sd,
@@ -1142,7 +1179,7 @@ def apply_tuning(design: dict, kc: float, z: float, p: float) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  8. Discretização (Tustin / Euler forward)
+#  8. Discretização (Tustin / Euler forward / Backward)
 # ════════════════════════════════════════════════════════════════════════════
 
 
@@ -1155,6 +1192,8 @@ def discretize_detailed(fN, fD, method: str, T: float) -> dict:
         A, B, C, D = 2.0, -2.0, T, T
     elif method == "euler":
         A, B, C, D = 1.0, -1.0, 0.0, T
+    elif method == "backward":
+        A, B, C, D = 1.0, -1.0, T, 0.0   # s = (z-1)/(T z)
     else:
         raise ValueError("Método desconhecido")
     fN, fD = trim(fN), trim(fD)
@@ -1249,13 +1288,16 @@ def _terms_tex(sym: str, terms, r: dict) -> str:
     return r"\begin{aligned}" + r" \\ ".join(lines) + r"\end{aligned}" if lines else "0"
 
 
+METHOD_NAMES = {"tustin": "Tustin (Bilinear)", "euler": "Euler (Forward)", "backward": "Backward (Euler atrasado)"}
+
+
 def solve_disc(fN, fD, method: str, T: float, origin: str):
     if T <= 0:
         raise ValueError("O período de amostragem T deve ser positivo.")
     fN, fD = trim(fN), trim(fD)
     r = discretize_detailed(fN, fD, method, T)
     mem = PassoAPasso()
-    mname = "Tustin (Bilinear)" if method == "tustin" else "Euler (Forward)"
+    mname = METHOD_NAMES[method]
     A, B, C, D, n_max = r["A"], r["B"], r["C"], r["D"], r["n_max"]
     fa, fb = r["fa"], r["fb"]
     pa, pb = poly_tex(fa, "z"), poly_tex(fb, "z")
@@ -1278,6 +1320,12 @@ def solve_disc(fN, fD, method: str, T: float, origin: str):
         mem.info("A transformação bilinear preserva a estabilidade (mapeia o semiplano esquerdo para dentro do círculo unitário). "
                  "Escrevemos $s = \\frac{Az+B}{Cz+D}$ multiplicando topo e base por $T$: "
                  f"$A={A:g},\\ B={B:g},\\ C={C:g},\\ D={D:g}$.")
+    elif method == "backward":
+        mem.tex(rf"s \;\longrightarrow\; \frac{{z-1}}{{Tz}} = \frac{{z-1}}{{{T:g}\,z}} = \frac{{{pa}}}{{{pb}}}")
+        mem.info("O método Backward (Euler atrasado) aproxima a derivada por $\\dot x \\approx \\frac{x[k]-x[k-1]}{T}$, "
+                 "o que equivale a $s = \\frac{z-1}{Tz}$. Ele mapeia o semiplano esquerdo para dentro do círculo de centro $0{,}5$ e raio $0{,}5$, "
+                 "portanto **preserva a estabilidade** (sistemas estáveis continuam estáveis), embora distorça mais a resposta que o Tustin.")
+        mem.info(f"Aqui $s = \\frac{{Az+B}}{{Cz+D}}$ com $A={A:g},\\ B={B:g},\\ C={C:g},\\ D={D:g}$ (o denominador é $Tz$).")
     else:
         mem.tex(rf"s \;\longrightarrow\; \frac{{z-1}}{{T}} = \frac{{z-1}}{{{T:g}}} = \frac{{{pa}}}{{{pb}}}")
         mem.warn("Euler forward pode instabilizar sistemas estáveis se T for grande em relação às constantes de tempo.")
@@ -1333,7 +1381,7 @@ def solve_disc(fN, fD, method: str, T: float, origin: str):
     else:
         mem.md("Não há cancelamentos polo-zero em $F(z)$: a forma acima já é irredutível.")
 
-    # verificação DC (s=0 ↔ z=1 nos dois métodos)
+    # verificação DC (s=0 ↔ z=1 nos três métodos)
     dc_s = fN[-1] / fD[-1] if abs(fD[-1]) > 1e-12 else None
     den1 = np.polyval(dz, 1.0)
     dc_z = np.polyval(nz, 1.0) / den1 if abs(den1) > 1e-9 else None
@@ -1341,7 +1389,7 @@ def solve_disc(fN, fD, method: str, T: float, origin: str):
         good = abs(dc_s - dc_z) <= 1e-6 * max(1.0, abs(dc_s))
         (mem.ok if good else mem.warn)(
             f"Verificação do ganho DC: F(s=0) = {dc_s:.4f} e F(z=1) = {dc_z:.4f}  →  "
-            + ("coincidem ✅ (s = 0 corresponde a z = 1 nos dois métodos)" if good else "diferem ⚠️"))
+            + ("coincidem ✅ (s = 0 corresponde a z = 1 nos três métodos)" if good else "diferem ⚠️"))
     mem.commit("Normalização mônica e F(z) final")
 
     # 6 ─ equação de diferenças e estabilidade
