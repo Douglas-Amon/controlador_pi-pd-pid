@@ -684,7 +684,7 @@ def render_wizard(ns, steps, idx_key, on_edit, on_finish, last_extra=None):
 
 def gc_tex(d):
 
-    return r"G_&#x63;*(*&#x73;*)* = " + core.tf_tex(d["gcN"], d["gcD"], factored=True)
+    return r"G_c(s) = " + core.tf_tex(d["gcN"], d["gcD"], factored=True)
 
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -772,15 +772,15 @@ st.markdown(
 
 CTRL_INFO = {
 
-    "pd": ("PD", "⚡", "Adiciona um zero. Acelera e amortece a resposta transitória.", r"K_c\\,*(*&#x73;+&#x7A;*)*"),
+    "pd": ("PD", "⚡", "Adiciona um zero. Acelera e amortece a resposta transitória.", r"K_c\,(s+z)"),
 
-    "pi": ("PI", "🎯", "Polo na origem + zero. Elimina o erro em regime permanente.", r"K_c\\,\frac{s+z}{s}"),
+    "pi": ("PI", "🎯", "Polo na origem + zero. Elimina o erro em regime permanente.", r"K_c\,\frac{s+z}{s}"),
 
-    "pid": ("PID", "🧠", "Polo na origem + dois zeros iguais.", r"K_c\\,\frac{*(*&#x73;+&#x7A;*)^*&#x32;}{s}"),
+    "pid": ("PID", "🧠", "Polo na origem + dois zeros iguais.", r"K_c\,\frac{(s+z)^2}{s}"),
 
     "1pole": ("1 Polo", "🐢", "Compensador de atraso com um único polo.", r"\frac{K_c}{s+p}"),
 
-    "custom": ("Customize", "🛠️", "Você informa o controlador Gc(s); o app valida a malha fechada.", r"\frac{&#x4E;*(*&#x73;*)*}{&#x44;*(*&#x73;*)*}"),
+    "custom": ("Customize", "🛠️", "Você informa o controlador Gc(s); o app valida a malha fechada.", r"\frac{N(s)}{D(s)}"),
 
 }
 
@@ -1150,7 +1150,7 @@ def page_tuning():
 
     spec = d["spec"]
 
-    st.latex(r"G_&#x63;*(*&#x73;*)* = " + core.tf_tex(r["gcN"], r["gcD"], factored=True))
+    st.latex(r"G_c(s) = " + core.tf_tex(r["gcN"], r["gcD"], factored=True))
 
     mp_txt = f"{r['mp']:.2f}%" if math.isfinite(r["mp"]) else "—"
 
@@ -1322,4 +1322,3 @@ def render_footer():
 
 
 render_footer()
-
